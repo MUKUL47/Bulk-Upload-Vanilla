@@ -1,4 +1,4 @@
-import axios, { AxiosRequestConfig, AxiosProgressEvent } from "axios";
+import axios, { AxiosProgressEvent, AxiosRequestConfig } from "axios";
 export enum FileStatus {
   IN_QUEUE = "IN_QUEUE",
   IN_PROGRESS = "IN_PROGRESS",
@@ -12,10 +12,11 @@ export type FileObj = {
   downloadCount?: number;
   cancel?: () => void;
   isCancelled?: boolean;
+  id: string;
+  lastProgressUpdated?: number;
 };
 export type Constructor = {
   concurrency: number;
-  files: File[];
   onUpdate?: (event: Event) => void;
   requestOptions?: {
     downloadProgress?: boolean;
@@ -30,11 +31,10 @@ export type Event = {
   IN_QUEUE: StandardFile<Partial<FileObj>>;
   IN_PROGRESS: StandardFile<Partial<FileObj>>;
   FAILED_UPLOADS: StandardFile<Partial<FileObj>>;
-  COMPLETED_UPLOADS: StandardFile<Partial<FileObj>>;
+  COMPLETED_UPLOADS: number; //StandardFile<Partial<FileObj>>;
 };
 export default class BulkUpload {
   private _concurrency: number = 1;
-  private _files: File[] = [];
   private _onUpdate?: (event: Event) => void;
   private _uploadProgress: boolean = false;
   private _downloadProgress: boolean = false;
@@ -45,9 +45,9 @@ export default class BulkUpload {
   private inQueue: StandardFile = new Map<string, {}>();
   private inProgress: StandardFile = new Map<string, {}>();
   private failedUploads: StandardFile = new Map<string, {}>();
-  private completedUploads: StandardFile = new Map<string, {}>();
+  private completedUploads: number = 0; // StandardFile = new Map<string, {}>();
   private destroyed: boolean = false;
-  private lastProgressUpload: number = 0;
+  private uploadCompleted: boolean = false;
   /**
    * @param {number} concurrency - The number of concurrent file uploads allowed.
    * @param {File[]} files - The array of File objects to be uploaded.
@@ -60,7 +60,7 @@ export default class BulkUpload {
    */
   constructor({
     concurrency,
-    files,
+    // files,
     onUpdate,
     requestOptions,
     requestArguments,
@@ -68,7 +68,7 @@ export default class BulkUpload {
     lastProgressUpload,
   }: Constructor) {
     this._concurrency = concurrency;
-    this._files = files;
+    // this._files = files;
     this._onUpdate = onUpdate;
     this._uploadProgress = !!requestOptions?.uploadProgress;
     this._downloadProgress = !!requestOptions?.downloadProgress;
@@ -78,34 +78,37 @@ export default class BulkUpload {
   }
   /**
    * getControls to override upload flow
-   * @returns {Object} {cancel, retry, destroy}
+   * @returns {Object} {cancel, retry, destroy, updateQueue}
    */
   public getControls() {
     return {
       cancel: this.cancelOperation,
       retry: this.retryFailedOperation,
+      updateQueue: this.updateQueue,
       destroy: this.destroy,
     };
   }
   /**
    * start the queue progress
    */
-  public start() {
-    for (let i = 0; i < this._files.length; i++) {
-      const file = this._files[i]!;
+  public start(files: File[]) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
       const value = {
         file,
         status: FileStatus.IN_PROGRESS,
         isCancelled: false,
+        id: file.name,
       };
       if (i < this._concurrency) {
         value.status = FileStatus.IN_PROGRESS;
-        this.inProgress.set(file.name, value);
+        this.inProgress.set(value.id, value);
       } else {
         value.status = FileStatus.IN_QUEUE;
-        this.inQueue.set(file.name, value);
+        this.inQueue.set(value.id, value);
       }
     }
+    this.sendUpdateEvent();
     this.startInitialProgress();
   }
   private startInitialProgress() {
@@ -137,19 +140,25 @@ export default class BulkUpload {
         fileObj[isDownload ? "downloadCount" : "uploadCount"] = Math.floor(
           (loaded / total) * 100
         );
-        if (typeof this._lastProgressUpload === "number") {
-          if (Date.now() - this.lastProgressUpload < this.lastProgressUpload) {
-            this.sendUpdateEvent();
-          }
-          this.lastProgressUpload = Date.now();
+        if (typeof fileObj?.lastProgressUpdated !== "number") {
+          fileObj.lastProgressUpdated = Date.now();
+        }
+        if (
+          typeof this._lastProgressUpload === "number" &&
+          Date.now() - fileObj?.lastProgressUpdated >= this._lastProgressUpload
+        ) {
+          this.sendUpdateEvent();
+          fileObj.lastProgressUpdated = Date.now();
         }
       };
-    } catch (e) {}
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   private uploadFile(fileObj: FileObj) {
     try {
-      const { file } = fileObj;
+      //   const { file } = fileObj;
       const axiosRequestArgs: AxiosRequestConfig =
         this._requestArguments(fileObj);
       if (this._downloadProgress) {
@@ -168,9 +177,9 @@ export default class BulkUpload {
       axios(axiosRequestArgs)
         .then(() => {
           if (this.destroyed) return;
-          this.inProgress.delete(file.name);
+          this.inProgress.delete(fileObj.id);
           fileObj.status = FileStatus.SUCCESS;
-          this.completedUploads.set(file.name, fileObj);
+          this.completedUploads += 1; //.set(fileObj.id, fileObj);
           this.sendUpdateEvent();
           this.freeQueue();
         })
@@ -191,24 +200,29 @@ export default class BulkUpload {
   private freeQueue(): void {
     if (this.inQueue.size === 0 || this.destroyed) {
       this.sendUpdateEvent();
-      this._onUploadComplete?.();
+      if (!this.uploadCompleted) {
+        this._onUploadComplete?.();
+        this.uploadCompleted = true;
+      }
       return;
     }
-    for (let [fileName, file] of this.inQueue) {
+    if (this.inProgress.size === this._concurrency) {
+      return this.sendUpdateEvent();
+    }
+    for (let [_, file] of this.inQueue) {
       file.status = FileStatus.IN_PROGRESS;
-      this.inProgress.set(fileName, file);
-      this.uploadFile(file as FileObj);
-      this.inQueue.delete(fileName);
+      this.inQueue.delete(file.id!);
+      this.inProgress.set(file.id!, file);
       this.sendUpdateEvent();
+      this.uploadFile(file as FileObj);
       break;
     }
   }
 
   private uploadFailed(fileObj: FileObj): void {
-    const { file } = fileObj;
     fileObj.status = FileStatus.FAILED;
-    this.inProgress.delete(file.name);
-    this.failedUploads.set(file.name, fileObj);
+    this.inProgress.delete(fileObj.id);
+    this.failedUploads.set(fileObj.id, fileObj);
     this.sendUpdateEvent();
     this.freeQueue();
   }
@@ -232,6 +246,7 @@ export default class BulkUpload {
 
   private destroy = () => {
     this.destroyed = true;
+    const now = Date.now();
     for (let [, file] of this.inProgress as Map<string, FileObj>) {
       if (file.status === FileStatus.IN_PROGRESS) {
         this.cancelOperation(file);
@@ -239,9 +254,10 @@ export default class BulkUpload {
           file: file.file,
           status: FileStatus.FAILED,
           isCancelled: false,
+          id: `${file.file.name}-${now}`,
         };
-        this.inProgress.delete(file.file.name);
-        this.failedUploads.set(file.file.name, file);
+        this.inProgress.delete(file.id);
+        this.failedUploads.set(file.id, file);
       }
     }
     this.sendUpdateEvent();
@@ -250,23 +266,31 @@ export default class BulkUpload {
   private retryFailedOperation = (fileObjs: FileObj[]) => {
     if (!Array.isArray(fileObjs))
       throw new Error("Retry Argument must be an array");
-    this.destroyed = false;
-    const retries: FileObj[] = [];
+    const retries: File[] = [];
     for (let file of fileObjs) {
       if (file.status === FileStatus.FAILED) {
-        file = {
-          file: file.file,
-          status: FileStatus.IN_PROGRESS,
-          isCancelled: false,
-        };
-        this.failedUploads.delete(file.file.name);
-        this.inProgress.set(file.file.name, file);
-        retries.push(file);
+        this.failedUploads.delete(file.id);
+        retries.push(file.file);
       }
     }
-    this.sendUpdateEvent();
-    for (const retryFile of retries) {
-      this.uploadFile(retryFile as FileObj);
+    this.updateQueue(retries);
+  };
+  private updateQueue = (files: File[]) => {
+    this.uploadCompleted = false;
+    this.destroyed = false;
+    const now = Date.now();
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      const value = {
+        file,
+        status: FileStatus.IN_QUEUE,
+        isCancelled: false,
+        id: `${file.name}-${now}`,
+      };
+      value.status = FileStatus.IN_QUEUE;
+      this.inQueue.set(value.id, value);
+      this.freeQueue();
     }
+    this.sendUpdateEvent();
   };
 }
