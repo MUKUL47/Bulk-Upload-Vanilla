@@ -1,45 +1,23 @@
 import axios, { AxiosProgressEvent, AxiosRequestConfig } from "axios";
-export enum FileStatus {
-  IN_QUEUE = "IN_QUEUE",
-  IN_PROGRESS = "IN_PROGRESS",
-  SUCCESS = "SUCCESS",
-  FAILED = "FAILED",
-}
-export type FileObj = {
-  file: File;
-  status: FileStatus;
-  uploadCount?: number;
-  downloadCount?: number;
-  cancel?: () => void;
-  isCancelled?: boolean;
-  id: string;
-  lastProgressUpdated?: number;
-};
-export type Constructor = {
-  concurrency: number;
-  onUpdate?: (event: Event) => void;
-  requestOptions?: {
-    downloadProgress?: boolean;
-    uploadProgress?: boolean;
-  };
-  requestArguments: (fileObj: FileObj) => AxiosRequestConfig;
-  onUploadComplete?: () => void;
-  lastProgressUpload?: number;
-};
-export type StandardFile<T = Partial<FileObj> | FileObj> = Map<string, T>;
-export type Event = {
-  IN_QUEUE: StandardFile<Partial<FileObj>>;
-  IN_PROGRESS: StandardFile<Partial<FileObj>>;
-  FAILED_UPLOADS: StandardFile<Partial<FileObj>>;
-  COMPLETED_UPLOADS: number; //StandardFile<Partial<FileObj>>;
-};
+import {
+  EventType,
+  Constructor,
+  FileObj,
+  FileStatus,
+  StandardFile,
+  //
+  UploadType,
+  FileHierarchy,
+  FileHierarchyFileType,
+} from "./types";
 export default class BulkUpload {
   private _concurrency: number = 1;
-  private _onUpdate?: (event: Event) => void;
+  private _onUpdate?: (event: EventType) => void;
   private _uploadProgress: boolean = false;
   private _downloadProgress: boolean = false;
   private _requestArguments: (fileObj: FileObj) => any = () => null;
   private _onUploadComplete?: () => void = () => {};
+  private _uploadType: UploadType = UploadType.FILES;
   private _lastProgressUpload?: number | null = 100;
   //
   private inQueue: StandardFile = new Map<string, {}>();
@@ -56,7 +34,8 @@ export default class BulkUpload {
    * @param {boolean} [requestOptions.uploadProgress=false] - Whether to report upload progress
    * @param {function} requestArguments - callback function which returns payload for axios request along side fileObject as an argument
    * @param {function} onUploadComplete - callback function when pending and queue is finished
-   * @param {function} lastProgressUpload - how frequest onUpdate callback should be invoked, whenever upload/download progress is updated
+   * @param {number} lastProgressUpload - how frequest onUpdate callback should be invoked, whenever upload/download progress is updated
+   * @param {string} uploadType (FILE|FILES_HIERARCHY)- this library supports both folder hierarchy and direct files upload for fetching folder-hierarchy please use this package : https://www.npmjs.com/package/files-hierarchy
    */
   constructor({
     concurrency,
@@ -66,15 +45,16 @@ export default class BulkUpload {
     requestArguments,
     onUploadComplete,
     lastProgressUpload,
+    uploadType,
   }: Constructor) {
     this._concurrency = concurrency;
-    // this._files = files;
     this._onUpdate = onUpdate;
     this._uploadProgress = !!requestOptions?.uploadProgress;
     this._downloadProgress = !!requestOptions?.downloadProgress;
     this._requestArguments = requestArguments;
     this._onUploadComplete = onUploadComplete;
     this._lastProgressUpload = lastProgressUpload;
+    this._uploadType = uploadType || UploadType.FILES;
   }
   /**
    * getControls to override upload flow
@@ -89,16 +69,19 @@ export default class BulkUpload {
     };
   }
   /**
+   * @param {Array} File or FileHierarchy objects
    * start the queue progress
    */
-  public start(files: File[]) {
+  public start(files: File[] | FileHierarchy[]) {
     for (let i = 0; i < files.length; i++) {
       const file = files[i]!;
+      const isFile = this.isFileType();
       const value = {
-        file,
+        file: isFile ? (file as File) : null,
+        fileHierarchy: isFile ? (file as FileHierarchy) : null,
         status: FileStatus.IN_PROGRESS,
         isCancelled: false,
-        id: file.name,
+        id: this.getTargetValue(file),
       };
       if (i < this._concurrency) {
         value.status = FileStatus.IN_PROGRESS;
@@ -158,7 +141,6 @@ export default class BulkUpload {
 
   private uploadFile(fileObj: FileObj) {
     try {
-      //   const { file } = fileObj;
       const axiosRequestArgs: AxiosRequestConfig =
         this._requestArguments(fileObj);
       if (this._downloadProgress) {
@@ -247,14 +229,18 @@ export default class BulkUpload {
   private destroy = () => {
     this.destroyed = true;
     const now = Date.now();
+    const isFile = this.isFileType();
     for (let [, file] of this.inProgress as Map<string, FileObj>) {
       if (file.status === FileStatus.IN_PROGRESS) {
         this.cancelOperation(file);
         file = {
           file: file.file,
+          fileHierarchy: isFile ? file.fileHierarchy : null,
           status: FileStatus.FAILED,
           isCancelled: false,
-          id: `${file.file.name}-${now}`,
+          id: `${this.getTargetValue(
+            file.fileHierarchy || (file.file as File)
+          )}-${now}`,
         };
         this.inProgress.delete(file.id);
         this.failedUploads.set(file.id, file);
@@ -266,26 +252,29 @@ export default class BulkUpload {
   private retryFailedOperation = (fileObjs: FileObj[]) => {
     if (!Array.isArray(fileObjs))
       throw new Error("Retry Argument must be an array");
-    const retries: File[] = [];
+    const retries: (File | FileHierarchy)[] = [];
+    const isFile = this.isFileType();
     for (let file of fileObjs) {
       if (file.status === FileStatus.FAILED) {
         this.failedUploads.delete(file.id);
-        retries.push(file.file);
+        retries.push(isFile ? file.file! : file.fileHierarchy!);
       }
     }
     this.updateQueue(retries);
   };
-  private updateQueue = (files: File[]) => {
+  private updateQueue = (files: (File | FileHierarchy)[]) => {
     this.uploadCompleted = false;
     this.destroyed = false;
     const now = Date.now();
     for (let i = 0; i < files.length; i++) {
       const file = files[i]!;
+      const isFile = this.isFileType();
       const value = {
-        file,
+        file: isFile ? (file as File) : null,
+        fileHierarchy: isFile ? (file as FileHierarchy) : null,
         status: FileStatus.IN_QUEUE,
         isCancelled: false,
-        id: `${file.name}-${now}`,
+        id: `${this.getTargetValue(file)}-${now}`,
       };
       value.status = FileStatus.IN_QUEUE;
       this.inQueue.set(value.id, value);
@@ -293,4 +282,26 @@ export default class BulkUpload {
     }
     this.sendUpdateEvent();
   };
+
+  private getTargetValue(fileObj: File | FileHierarchy) {
+    if (fileObj instanceof File) {
+      return fileObj.name;
+    }
+    return fileObj.path;
+  }
+
+  private isFileType(): boolean {
+    return this._uploadType === UploadType.FILES;
+  }
 }
+export {
+  EventType,
+  Constructor,
+  FileObj,
+  FileStatus,
+  StandardFile,
+  //
+  UploadType,
+  FileHierarchy,
+  FileHierarchyFileType,
+};
