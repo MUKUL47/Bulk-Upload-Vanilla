@@ -1,5 +1,5 @@
 {
-  "name": "my-package",
+  "name": "bulk-upload",
   "license": "MIT",
   "version": "0.0.1",
   "main": "dist/index.js",
