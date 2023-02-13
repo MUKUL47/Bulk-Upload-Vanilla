@@ -10,10 +10,6 @@ type FileHierarchy = {
     orignalWebkitPath: string;
     file?: File;
 };
-declare enum UploadType {
-    FILES = "FILES",
-    FILES_HIERARCHY = "FILES_HIERARCHY"
-}
 declare enum FileStatus {
     IN_QUEUE = "IN_QUEUE",
     IN_PROGRESS = "IN_PROGRESS",
@@ -41,7 +37,7 @@ type Constructor = {
     requestArguments: (fileObj: FileObj) => AxiosRequestConfig;
     onUploadComplete?: () => void;
     lastProgressUpload?: number;
-    uploadType?: UploadType;
+    isFileHierarchy?: boolean;
 };
 type StandardFile<T = Partial<FileObj> | FileObj> = Map<string, T>;
 type EventType = {
@@ -58,7 +54,7 @@ declare class BulkUpload {
     private _downloadProgress;
     private _requestArguments;
     private _onUploadComplete?;
-    private _uploadType;
+    private _isFileHierarchy;
     private _lastProgressUpload?;
     private inQueue;
     private inProgress;
@@ -66,6 +62,7 @@ declare class BulkUpload {
     private completedUploads;
     private destroyed;
     private uploadCompleted;
+    private initiated;
     /**
      * @param {number} concurrency - The number of concurrent file uploads allowed.
      * @param {File[]} files - The array of File objects to be uploaded.
@@ -75,9 +72,9 @@ declare class BulkUpload {
      * @param {function} requestArguments - callback function which returns payload for axios request along side fileObject as an argument
      * @param {function} onUploadComplete - callback function when pending and queue is finished
      * @param {number} lastProgressUpload - how frequest onUpdate callback should be invoked, whenever upload/download progress is updated
-     * @param {string} uploadType (FILE|FILES_HIERARCHY)- this library supports both folder hierarchy and direct files upload for fetching folder-hierarchy please use this package : https://www.npmjs.com/package/files-hierarchy
+     * @param {boolean} isFileHierarchy - For fetching & uploading folder-hierarchy please use this package : https://www.npmjs.com/package/files-hierarchy
      */
-    constructor({ concurrency, onUpdate, requestOptions, requestArguments, onUploadComplete, lastProgressUpload, uploadType, }: Constructor);
+    constructor({ concurrency, onUpdate, requestOptions, requestArguments, onUploadComplete, lastProgressUpload, isFileHierarchy, }: Constructor);
     /**
      * getControls to override upload flow
      * @returns {Object} {cancel, retry, destroy, updateQueue}
@@ -108,7 +105,8 @@ declare class BulkUpload {
     private retryFailedOperation;
     private updateQueue;
     private getTargetValue;
+    private getFileTargetVal;
     private isFileType;
 }
 
-export { Constructor, EventType, FileHierarchy, FileHierarchyFileType, FileObj, FileStatus, StandardFile, UploadType, BulkUpload as default };
+export { Constructor, EventType, FileHierarchy, FileHierarchyFileType, FileObj, FileStatus, StandardFile, BulkUpload as default };
