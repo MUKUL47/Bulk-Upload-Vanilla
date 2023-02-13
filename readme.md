@@ -15,7 +15,13 @@ A set of controls for cancelling, retrying, or destroying the upload queue.
 
 ## Usage
 
+```
+npm i browser-bulk-upload
+```
+
 ```js
+import BulkUpload from "browser-bulk-upload";
+
 const bulkUpload = new BulkUpload({
   concurrency: 2,
   requestArguments: ({ file, fileHierarchy }: any) => {
