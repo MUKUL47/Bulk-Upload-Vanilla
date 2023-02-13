@@ -10,11 +10,6 @@ type FileHierarchy = {
   orignalWebkitPath: string;
   file?: File;
 };
-//
-enum UploadType {
-  FILES = "FILES",
-  FILES_HIERARCHY = "FILES_HIERARCHY",
-}
 enum FileStatus {
   IN_QUEUE = "IN_QUEUE",
   IN_PROGRESS = "IN_PROGRESS",
@@ -42,7 +37,7 @@ type Constructor = {
   requestArguments: (fileObj: FileObj) => AxiosRequestConfig;
   onUploadComplete?: () => void;
   lastProgressUpload?: number;
-  uploadType?: UploadType;
+  isFileHierarchy?: boolean;
 };
 type StandardFile<T = Partial<FileObj> | FileObj> = Map<string, T>;
 type EventType = {
@@ -59,5 +54,4 @@ export {
   FileStatus,
   FileHierarchyFileType,
   StandardFile,
-  UploadType,
 };
