@@ -78,7 +78,7 @@ export default class BulkUpload {
       const isFile = this.isFileType();
       const value = {
         file: isFile ? (file as File) : null,
-        fileHierarchy: isFile ? (file as FileHierarchy) : null,
+        fileHierarchy: !isFile ? (file as FileHierarchy) : null,
         status: FileStatus.IN_PROGRESS,
         isCancelled: false,
         id: this.getTargetValue(file),
